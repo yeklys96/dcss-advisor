@@ -31,6 +31,8 @@ export default class DCSSAdvisor {
     // ─── 상태 ─────────────────────────────────────────────────────────────
     #state = {
         player: null,        // player 메시지 누적 객체
+        inv: {},             // slot→item 인벤토리 (inv 메시지)
+        spells: [],          // 배운 마법 목록 (spells 메시지)
         log: [],             // 최근 게임 로그 텍스트
         lastAdviceAt: 0,
         busy: false,
@@ -76,6 +78,30 @@ export default class DCSSAdvisor {
                 }
                 break;
             }
+
+            // 인벤토리 갱신
+            case 'inv': {
+                const items = m.items ?? [];
+                for (const item of items) {
+                    if (item.slot != null) {
+                        if (item.base_type === 0 && item.name === '') {
+                            delete this.#state.inv[item.slot]; // 빈 슬롯 제거
+                        } else {
+                            this.#state.inv[item.slot] = item.name ?? item.id ?? String(item.slot);
+                        }
+                    }
+                }
+                break;
+            }
+
+            // 마법 목록 갱신
+            case 'spells':
+                this.#state.spells = (m.spells ?? []).map(s => {
+                    const level = s.level ?? '';
+                    const fail = s.fail != null ? ` (실패율 ${s.fail}%)` : '';
+                    return `${s.title ?? s.name ?? '?'} Lv${level}${fail}`;
+                });
+                break;
 
             // 새 레벨 진입 등 dungeon level 변경
             case 'update_level_data':
@@ -150,7 +176,7 @@ export default class DCSSAdvisor {
             body: JSON.stringify({
                 systemInstruction: { parts: [{ text: systemText }] },
                 contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-                generationConfig: { maxOutputTokens: 1024 },
+                generationConfig: { maxOutputTokens: 2048 },
             }),
         });
         if (!res.ok) {
@@ -178,7 +204,7 @@ export default class DCSSAdvisor {
                     { role: 'system', content: systemText },
                     { role: 'user', content: userPrompt },
                 ],
-                max_tokens: 1024,
+                max_tokens: 2048,
             }),
         });
         if (!res.ok) {
@@ -216,17 +242,56 @@ export default class DCSSAdvisor {
 
         const stats = p
             ? [
-                `종족/직업: ${p.species ?? '?'} ${p.background ?? '?'}`,
-                `레벨: ${p.xl ?? '?'} / XP: ${p.exp ?? '?'}`,
+                `이름: ${p.name ?? '?'}  종족/직업: ${p.species ?? '?'} ${p.background ?? '?'}`,
+                `레벨: XL${p.xl ?? '?'}`,
                 `HP: ${p.hp ?? '?'}/${p.mhp ?? '?'}  MP: ${p.mp ?? '?'}/${p.mmp ?? '?'}`,
                 `AC: ${p.ac ?? '?'}  EV: ${p.ev ?? '?'}  SH: ${p.sh ?? '?'}`,
                 `위치: ${p.place ?? '?'}`,
-                `신: ${p.god ?? '없음'}`,
+                `신: ${p.god ?? '없음'}${p.piety != null ? ` (경건도 ${p.piety})` : ''}`,
+                `골드: ${p.gold ?? '?'}`,
                 `상태이상: ${(p.status ?? []).map(s => s.light ?? s.text ?? s).join(', ') || '없음'}`,
             ].join('\n')
             : '플레이어 정보 없음 (아직 게임 시작 전)';
 
-        return `[현재 캐릭터 상태]\n${stats}\n\n[최근 게임 로그]\n${log || '(없음)'}`;
+        // 스킬 (player 메시지에 포함된 경우)
+        const skills = (() => {
+            const raw = p?.skills ?? [];
+            if (!raw.length) return '(없음)';
+            return raw
+                .filter(s => (s.level ?? 0) > 0)
+                .sort((a, b) => (b.level ?? 0) - (a.level ?? 0))
+                .slice(0, 12)
+                .map(s => `${s.name ?? s.id ?? '?'} Lv${s.level ?? 0}`)
+                .join(', ') || '(없음)';
+        })();
+
+        // 마법
+        const spells = this.#state.spells.length
+            ? this.#state.spells.slice(0, 12).join(', ')
+            : '(없음)';
+
+        // 인벤토리
+        const inventory = Object.values(this.#state.inv);
+        const invText = inventory.length
+            ? inventory.slice(0, 20).join(', ')
+            : '(없음)';
+
+        return [
+            '[현재 캐릭터 상태]',
+            stats,
+            '',
+            '[스킬]',
+            skills,
+            '',
+            '[배운 마법]',
+            spells,
+            '',
+            '[인벤토리]',
+            invText,
+            '',
+            '[최근 게임 로그]',
+            log || '(없음)',
+        ].join('\n');
     }
 
     // ─── UI 구축 ─────────────────────────────────────────────────────────
@@ -349,9 +414,16 @@ export default class DCSSAdvisor {
             <div id="dcss-advisor-cfg">
                 <label>AI 제공자</label>
                 <select id="dcss-adv-provider">
+                    <option value="openrouter" ${this.#cfg.provider === 'openrouter' ? 'selected' : ''}>OpenRouter (무료 글로벌)</option>
                     <option value="gemini" ${this.#cfg.provider === 'gemini' ? 'selected' : ''}>Gemini (무료)</option>
                     <option value="ollama" ${this.#cfg.provider === 'ollama' ? 'selected' : ''}>Ollama (로컬)</option>
                 </select>
+                <div id="dcss-adv-openrouter-cfg" style="display:${this.#cfg.provider === 'openrouter' ? 'contents' : 'none'}">
+                    <label>OpenRouter API 키 <a href="https://openrouter.ai/keys" target="_blank" style="color:#9cf;font-size:10px">발급</a></label>
+                    <input id="dcss-adv-orkey" type="password" value="${this.#cfg.openrouterKey}" placeholder="sk-or-..." />
+                    <label>모델</label>
+                    <input id="dcss-adv-or-model" type="text" value="${this.#cfg.openrouterModel}" />
+                </div>
                 <div id="dcss-adv-gemini-cfg" style="display:${this.#cfg.provider === 'gemini' ? 'contents' : 'none'}">
                     <label>Gemini API 키 <a href="https://aistudio.google.com/apikey" target="_blank" style="color:#9cf;font-size:10px">발급</a></label>
                     <input id="dcss-adv-apikey" type="password" value="${this.#cfg.apiKey}" placeholder="AIza..." />
