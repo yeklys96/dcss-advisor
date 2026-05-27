@@ -42,13 +42,16 @@ export default class DCSSAdvisor {
 
     // ─── 진입점 ───────────────────────────────────────────────────────────
     onLoad() {
+        console.log(`[DCSSAdvisor] ✅ 모듈 로드됨 v${DCSSAdvisor.version} — provider: ${this.#cfg.provider}, model: ${this.#cfg.geminiModel}`);
         this.#loadConfig();
+        console.log(`[DCSSAdvisor] 설정: provider=${this.#cfg.provider}, model=${this.#cfg.geminiModel}, apiKey=${this.#cfg.apiKey ? '설정됨' : '❌ 없음'}`);
         this.#buildPanel();
 
         const { IOHook } = DWEM.Modules;
         IOHook.handle_message.after.addHandler('DCSSAdvisor', (msg) => {
             this.#onMessage(msg);
         });
+        console.log('[DCSSAdvisor] IOHook 핸들러 등록 완료');
     }
 
     // ─── WebSocket 메시지 처리 ────────────────────────────────────────────
