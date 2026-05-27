@@ -11,15 +11,18 @@ export default class DCSSAdvisor {
     static name = 'DCSSAdvisor';
     static version = '1.0';
     static dependencies = ['IOHook:1.0'];
-    static description = 'Ollama 기반 AI DCSS 게임 조언 패널';
+    static description = 'AI DCSS 게임 조언 패널 (Gemini / Ollama)';
 
     // ─── 설정 (localStorage 에 저장됨) ───────────────────────────────────
     #cfg = {
+        provider: 'gemini',              // 'gemini' | 'ollama'
+        apiKey: '',                      // Gemini API 키 (aistudio.google.com/apikey)
+        geminiModel: 'gemini-2.0-flash', // 무료: gemini-2.0-flash, gemini-1.5-flash
         ollamaUrl: 'http://localhost:11434',
-        model: 'qwen2.5:3b-instruct',
+        ollamaModel: 'qwen2.5:3b-instruct',
         autoAdvice: true,
-        cooldownMs: 10000,   // 자동 조언 최소 간격 (ms)
-        maxLogLines: 30,     // 보관할 게임 로그 줄 수
+        cooldownMs: 10000,
+        maxLogLines: 30,
         lang: 'ko',
     };
 
@@ -110,7 +113,7 @@ export default class DCSSAdvisor {
         this.#requestAdvice();
     }
 
-    // ─── Ollama API 호출 ──────────────────────────────────────────────────
+    // ─── AI API 호출 (provider에 따라 분기) ──────────────────────────────
     async #requestAdvice() {
         if (this.#state.busy) return;
         this.#state.busy = true;
@@ -118,36 +121,61 @@ export default class DCSSAdvisor {
         this.#setStatus('⏳ 분석 중…');
 
         const prompt = this.#buildPrompt();
-        const url = `${this.#cfg.ollamaUrl}/api/chat`;
-
         try {
-            const res = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    model: this.#cfg.model,
-                    stream: false,
-                    messages: [
-                        {
-                            role: 'system',
-                            content: this.#cfg.lang === 'ko'
-                                ? 'DCSS(Dungeon Crawl Stone Soup) 전문가입니다. 현재 상황을 분석하고 즉시 실행 가능한 전술·전략 조언을 한국어로 3~5 문장으로 알려주세요.'
-                                : 'You are a DCSS expert. Analyze the current situation and give 3-5 concise tactical/strategic tips in English.',
-                        },
-                        { role: 'user', content: prompt },
-                    ],
-                }),
-            });
-
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const json = await res.json();
-            const advice = json?.message?.content ?? '응답을 받지 못했습니다.';
+            const advice = this.#cfg.provider === 'gemini'
+                ? await this.#callGemini(prompt)
+                : await this.#callOllama(prompt);
             this.#showAdvice(advice);
         } catch (err) {
             this.#setStatus(`❌ 오류: ${err.message}`);
         } finally {
             this.#state.busy = false;
         }
+    }
+
+    async #callGemini(userPrompt) {
+        if (!this.#cfg.apiKey) throw new Error('Gemini API 키가 설정되지 않았습니다. ⚙ 버튼에서 입력하세요.');
+        const systemText = this.#cfg.lang === 'ko'
+            ? 'DCSS(Dungeon Crawl Stone Soup) 전문가입니다. 현재 상황을 분석하고 즉시 실행 가능한 전술·전략 조언을 한국어로 3~5 문장으로 알려주세요.'
+            : 'You are a DCSS expert. Analyze the current situation and give 3-5 concise tactical/strategic tips in English.';
+        const model = this.#cfg.geminiModel || 'gemini-2.0-flash';
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.#cfg.apiKey}`;
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                systemInstruction: { parts: [{ text: systemText }] },
+                contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+                generationConfig: { maxOutputTokens: 512 },
+            }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err?.error?.message ?? `HTTP ${res.status}`);
+        }
+        const json = await res.json();
+        return json?.candidates?.[0]?.content?.parts?.[0]?.text ?? '응답을 받지 못했습니다.';
+    }
+
+    async #callOllama(userPrompt) {
+        const systemText = this.#cfg.lang === 'ko'
+            ? 'DCSS(Dungeon Crawl Stone Soup) 전문가입니다. 현재 상황을 분석하고 즉시 실행 가능한 전술·전략 조언을 한국어로 3~5 문장으로 알려주세요.'
+            : 'You are a DCSS expert. Analyze the current situation and give 3-5 concise tactical/strategic tips in English.';
+        const res = await fetch(`${this.#cfg.ollamaUrl}/api/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: this.#cfg.ollamaModel,
+                stream: false,
+                messages: [
+                    { role: 'system', content: systemText },
+                    { role: 'user', content: userPrompt },
+                ],
+            }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json();
+        return json?.message?.content ?? '응답을 받지 못했습니다.';
     }
 
     #buildPrompt() {
@@ -285,10 +313,23 @@ export default class DCSSAdvisor {
                 </div>
             </div>
             <div id="dcss-advisor-cfg">
-                <label>Ollama URL</label>
-                <input id="dcss-adv-url" type="text" value="${this.#cfg.ollamaUrl}" />
-                <label>모델</label>
-                <input id="dcss-adv-model" type="text" value="${this.#cfg.model}" />
+                <label>AI 제공자</label>
+                <select id="dcss-adv-provider">
+                    <option value="gemini" ${this.#cfg.provider === 'gemini' ? 'selected' : ''}>Gemini (무료)</option>
+                    <option value="ollama" ${this.#cfg.provider === 'ollama' ? 'selected' : ''}>Ollama (로컬)</option>
+                </select>
+                <div id="dcss-adv-gemini-cfg" style="display:${this.#cfg.provider === 'gemini' ? 'contents' : 'none'}">
+                    <label>Gemini API 키 <a href="https://aistudio.google.com/apikey" target="_blank" style="color:#9cf;font-size:10px">발급</a></label>
+                    <input id="dcss-adv-apikey" type="password" value="${this.#cfg.apiKey}" placeholder="AIza..." />
+                    <label>모델</label>
+                    <input id="dcss-adv-gemini-model" type="text" value="${this.#cfg.geminiModel}" />
+                </div>
+                <div id="dcss-adv-ollama-cfg" style="display:${this.#cfg.provider === 'ollama' ? 'contents' : 'none'}">
+                    <label>Ollama URL</label>
+                    <input id="dcss-adv-url" type="text" value="${this.#cfg.ollamaUrl}" />
+                    <label>모델</label>
+                    <input id="dcss-adv-ollama-model" type="text" value="${this.#cfg.ollamaModel}" />
+                </div>
                 <label>언어</label>
                 <select id="dcss-adv-lang">
                     <option value="ko" ${this.#cfg.lang === 'ko' ? 'selected' : ''}>한국어</option>
@@ -317,9 +358,19 @@ export default class DCSSAdvisor {
             panel.querySelector('#dcss-advisor-cfg').classList.toggle('open');
         });
 
+        // 제공자 변경 시 관련 필드 표시/숨김
+        panel.querySelector('#dcss-adv-provider').addEventListener('change', (e) => {
+            const isGemini = e.target.value === 'gemini';
+            panel.querySelector('#dcss-adv-gemini-cfg').style.display = isGemini ? 'contents' : 'none';
+            panel.querySelector('#dcss-adv-ollama-cfg').style.display = isGemini ? 'none' : 'contents';
+        });
+
         panel.querySelector('#dcss-adv-save-btn').addEventListener('click', () => {
+            this.#cfg.provider = panel.querySelector('#dcss-adv-provider').value;
+            this.#cfg.apiKey = panel.querySelector('#dcss-adv-apikey').value.trim();
+            this.#cfg.geminiModel = panel.querySelector('#dcss-adv-gemini-model').value.trim();
             this.#cfg.ollamaUrl = panel.querySelector('#dcss-adv-url').value.trim().replace(/\/$/, '');
-            this.#cfg.model = panel.querySelector('#dcss-adv-model').value.trim();
+            this.#cfg.ollamaModel = panel.querySelector('#dcss-adv-ollama-model').value.trim();
             this.#cfg.lang = panel.querySelector('#dcss-adv-lang').value;
             this.#saveConfig();
             panel.querySelector('#dcss-advisor-cfg').classList.remove('open');
