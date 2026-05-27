@@ -11,13 +11,15 @@ export default class DCSSAdvisor {
     static name = 'DCSSAdvisor';
     static version = '1.0';
     static dependencies = ['IOHook:1.0'];
-    static description = 'AI DCSS 게임 조언 패널 (Gemini / Ollama)';
+    static description = 'AI DCSS 게임 조언 패널 (Gemini / OpenRouter / Ollama)';
 
     // ─── 설정 (localStorage 에 저장됨) ───────────────────────────────────
     #cfg = {
-        provider: 'gemini',              // 'gemini' | 'ollama'
+        provider: 'openrouter',          // 'gemini' | 'openrouter' | 'ollama'
         apiKey: '',                      // Gemini API 키 (aistudio.google.com/apikey)
         geminiModel: 'gemini-2.0-flash', // 무료: gemini-2.0-flash, gemini-1.5-flash
+        openrouterKey: '',               // OpenRouter API 키 (openrouter.ai/keys)
+        openrouterModel: 'google/gemini-2.0-flash-exp:free', // 무료 모델
         ollamaUrl: 'http://localhost:11434',
         ollamaModel: 'qwen2.5:3b-instruct',
         autoAdvice: true,
@@ -124,6 +126,8 @@ export default class DCSSAdvisor {
         try {
             const advice = this.#cfg.provider === 'gemini'
                 ? await this.#callGemini(prompt)
+                : this.#cfg.provider === 'openrouter'
+                ? await this.#callOpenRouter(prompt)
                 : await this.#callOllama(prompt);
             this.#showAdvice(advice);
         } catch (err) {
@@ -155,6 +159,34 @@ export default class DCSSAdvisor {
         }
         const json = await res.json();
         return json?.candidates?.[0]?.content?.parts?.[0]?.text ?? '응답을 받지 못했습니다.';
+    }
+
+    async #callOpenRouter(userPrompt) {
+        if (!this.#cfg.openrouterKey) throw new Error('OpenRouter API 키가 설정되지 않았습니다. ⚙ 버튼에서 입력하세요.');
+        const systemText = this.#cfg.lang === 'ko'
+            ? 'DCSS(Dungeon Crawl Stone Soup) 전문가입니다. 현재 상황을 분석하고 즉시 실행 가능한 전술·전략 조언을 한국어로 3~5 문장으로 알려주세요.'
+            : 'You are a DCSS expert. Analyze the current situation and give 3-5 concise tactical/strategic tips in English.';
+        const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.#cfg.openrouterKey}`,
+            },
+            body: JSON.stringify({
+                model: this.#cfg.openrouterModel || 'google/gemini-2.0-flash-exp:free',
+                messages: [
+                    { role: 'system', content: systemText },
+                    { role: 'user', content: userPrompt },
+                ],
+                max_tokens: 512,
+            }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err?.error?.message ?? `HTTP ${res.status}`);
+        }
+        const json = await res.json();
+        return json?.choices?.[0]?.message?.content ?? '응답을 받지 못했습니다.';
     }
 
     async #callOllama(userPrompt) {
@@ -360,13 +392,16 @@ export default class DCSSAdvisor {
 
         // 제공자 변경 시 관련 필드 표시/숨김
         panel.querySelector('#dcss-adv-provider').addEventListener('change', (e) => {
-            const isGemini = e.target.value === 'gemini';
-            panel.querySelector('#dcss-adv-gemini-cfg').style.display = isGemini ? 'contents' : 'none';
-            panel.querySelector('#dcss-adv-ollama-cfg').style.display = isGemini ? 'none' : 'contents';
+            const v = e.target.value;
+            panel.querySelector('#dcss-adv-openrouter-cfg').style.display = v === 'openrouter' ? 'contents' : 'none';
+            panel.querySelector('#dcss-adv-gemini-cfg').style.display = v === 'gemini' ? 'contents' : 'none';
+            panel.querySelector('#dcss-adv-ollama-cfg').style.display = v === 'ollama' ? 'contents' : 'none';
         });
 
         panel.querySelector('#dcss-adv-save-btn').addEventListener('click', () => {
             this.#cfg.provider = panel.querySelector('#dcss-adv-provider').value;
+            this.#cfg.openrouterKey = panel.querySelector('#dcss-adv-orkey').value.trim();
+            this.#cfg.openrouterModel = panel.querySelector('#dcss-adv-or-model').value.trim();
             this.#cfg.apiKey = panel.querySelector('#dcss-adv-apikey').value.trim();
             this.#cfg.geminiModel = panel.querySelector('#dcss-adv-gemini-model').value.trim();
             this.#cfg.ollamaUrl = panel.querySelector('#dcss-adv-url').value.trim().replace(/\/$/, '');
