@@ -15,9 +15,9 @@ export default class DCSSAdvisor {
 
     // ─── 설정 (localStorage 에 저장됨) ───────────────────────────────────
     #cfg = {
-        provider: 'openrouter',          // 'gemini' | 'openrouter' | 'ollama'
+        provider: 'gemini',          // 'gemini' | 'openrouter' | 'ollama'
         apiKey: '',                      // Gemini API 키 (aistudio.google.com/apikey)
-        geminiModel: 'gemini-2.0-flash', // 무료: gemini-2.0-flash, gemini-1.5-flash
+        geminiModel: 'gemini-2.5-flash', // 무료: gemini-2.0-flash, gemini-1.5-flash
         openrouterKey: '',               // OpenRouter API 키 (openrouter.ai/keys)
         openrouterModel: 'google/gemini-2.0-flash-exp:free', // 무료 모델
         ollamaUrl: 'http://localhost:11434',
