@@ -150,7 +150,7 @@ export default class DCSSAdvisor {
             body: JSON.stringify({
                 systemInstruction: { parts: [{ text: systemText }] },
                 contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-                generationConfig: { maxOutputTokens: 512 },
+                generationConfig: { maxOutputTokens: 1024 },
             }),
         });
         if (!res.ok) {
@@ -178,7 +178,7 @@ export default class DCSSAdvisor {
                     { role: 'system', content: systemText },
                     { role: 'user', content: userPrompt },
                 ],
-                max_tokens: 512,
+                max_tokens: 1024,
             }),
         });
         if (!res.ok) {
@@ -280,6 +280,8 @@ export default class DCSSAdvisor {
             #dcss-advisor-header button:hover { background: #3a2a5a; }
             #dcss-advisor-body {
                 flex: 1;
+                min-height: 80px;
+                max-height: 300px;
                 overflow-y: auto;
                 padding: 8px 10px;
                 white-space: pre-wrap;
