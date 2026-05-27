@@ -157,13 +157,18 @@ export default class DCSSAdvisor {
                 : await this.#callOllama(prompt);
             this.#showAdvice(advice);
         } catch (err) {
-            if (err.message.includes('429') || err.message.toLowerCase().includes('rate limit')) {
+            const msg = err.message.toLowerCase();
+            if (err.message.includes('429') || msg.includes('rate limit')) {
                 // 429: 60초 후 자동 재시도
                 this.#setStatus('⚠️ Rate limit — 60초 후 재시도합니다');
-                setTimeout(() => {
-                    this.#state.busy = false;
-                    this.#requestAdvice();
-                }, 60000);
+                setTimeout(() => { this.#state.busy = false; this.#requestAdvice(); }, 60000);
+                return;
+            }
+            if (msg.includes('high demand') || msg.includes('try again') || msg.includes('unavailable') || msg.includes('overloaded') || err.message.includes('503')) {
+                // 서버 과부하: 30초 후 자동 재시도
+                this.#setStatus('⚠️ 서버 과부하 — 30초 후 재시도합니다');
+                console.warn('[DCSSAdvisor] 서버 과부하 재시도 예약:', err.message);
+                setTimeout(() => { this.#state.busy = false; this.#requestAdvice(); }, 30000);
                 return;
             }
             this.#setStatus(`❌ 오류: ${err.message}`);
