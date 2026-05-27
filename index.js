@@ -177,15 +177,15 @@ export default class DCSSAdvisor {
         const systemText = this.#cfg.lang === 'ko'
             ? 'DCSS(Dungeon Crawl Stone Soup) 전문가입니다. 현재 상황을 분석하고 즉시 실행 가능한 전술·전략 조언을 한국어로 3~5 문장으로 알려주세요.'
             : 'You are a DCSS expert. Analyze the current situation and give 3-5 concise tactical/strategic tips in English.';
-        const model = this.#cfg.geminiModel || 'gemini-2.0-flash';
+        const model = this.#cfg.geminiModel || 'gemini-2.5-flash';
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.#cfg.apiKey}`;
+        console.log('[DCSSAdvisor] Gemini 호용 모델:', model, '/ 프롬프트 길이:', userPrompt.length, '글자');
         const res = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 systemInstruction: { parts: [{ text: systemText }] },
                 contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-                generationConfig: { maxOutputTokens: 2048 },
             }),
         });
         if (!res.ok) {
@@ -193,7 +193,15 @@ export default class DCSSAdvisor {
             throw new Error(err?.error?.message ?? `HTTP ${res.status}`);
         }
         const json = await res.json();
-        return json?.candidates?.[0]?.content?.parts?.[0]?.text ?? '응답을 받지 못했습니다.';
+        const candidate = json?.candidates?.[0];
+        const finishReason = candidate?.finishReason ?? 'UNKNOWN';
+        const text = candidate?.content?.parts?.[0]?.text ?? '응답을 받지 못했습니다.';
+        console.log(`[DCSSAdvisor] Gemini 응답: ${text.length}글자, finishReason=${finishReason}`);
+        if (finishReason === 'MAX_TOKENS') {
+            console.warn('[DCSSAdvisor] ⚠️ MAX_TOKENS: 응답이 토큰 한도로 잔령되었습니다!');
+            return text + '\n\n[⚠️ 응답이 잡핬 — 토큰 한도 초과]';
+        }
+        return text;
     }
 
     async #callOpenRouter(userPrompt) {
@@ -285,7 +293,7 @@ export default class DCSSAdvisor {
             ? inventory.slice(0, 20).join(', ')
             : '(없음)';
 
-        return [
+        const prompt = [
             '[현재 캐릭터 상태]',
             stats,
             '',
@@ -301,6 +309,8 @@ export default class DCSSAdvisor {
             '[최근 게임 로그]',
             log || '(없음)',
         ].join('\n');
+        console.log('[DCSSAdvisor] 프롬프트 길이:', prompt.length, '글자');
+        return prompt;
     }
 
     // ─── UI 구축 ─────────────────────────────────────────────────────────
@@ -354,7 +364,7 @@ export default class DCSSAdvisor {
             #dcss-advisor-header button:hover { background: #3a2a5a; }
             #dcss-advisor-body {
                 flex: 1;
-                min-height: 80px;
+                min-height: 0;
                 max-height: 300px;
                 overflow-y: auto;
                 padding: 8px 10px;
@@ -538,8 +548,9 @@ export default class DCSSAdvisor {
 
     #showAdvice(text) {
         if (!this.#panel) return;
+        console.log('[DCSSAdvisor] 패널 표시:', text.length, '글자');
         this.#panel.querySelector('#dcss-advisor-body').textContent = text;
-        this.#setStatus(`✅ ${new Date().toLocaleTimeString()} 갱신`);
+        this.#setStatus(`✅ ${new Date().toLocaleTimeString()} 갱신 (${text.length}글자)`);
     }
 
     #setStatus(msg) {
