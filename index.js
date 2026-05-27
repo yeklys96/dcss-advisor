@@ -1,0 +1,392 @@
+/**
+ * DCSSAdvisor — DWEM Module
+ * crawl.nemelex.cards 전용 AI 조언 패널
+ *
+ * 의존: IOHook:1.0
+ * Ollama 설정: OLLAMA_ORIGINS=https://crawl.nemelex.cards 환경변수 필요
+ *   예) $env:OLLAMA_ORIGINS="https://crawl.nemelex.cards"; ollama serve
+ */
+
+export default class DCSSAdvisor {
+    static name = 'DCSSAdvisor';
+    static version = '1.0';
+    static dependencies = ['IOHook:1.0'];
+    static description = 'Ollama 기반 AI DCSS 게임 조언 패널';
+
+    // ─── 설정 (localStorage 에 저장됨) ───────────────────────────────────
+    #cfg = {
+        ollamaUrl: 'http://localhost:11434',
+        model: 'qwen2.5:3b-instruct',
+        autoAdvice: true,
+        cooldownMs: 10000,   // 자동 조언 최소 간격 (ms)
+        maxLogLines: 30,     // 보관할 게임 로그 줄 수
+        lang: 'ko',
+    };
+
+    // ─── 상태 ─────────────────────────────────────────────────────────────
+    #state = {
+        player: null,        // player 메시지 누적 객체
+        log: [],             // 최근 게임 로그 텍스트
+        lastAdviceAt: 0,
+        busy: false,
+    };
+
+    #panel = null;           // 패널 DOM 요소
+
+    // ─── 진입점 ───────────────────────────────────────────────────────────
+    onLoad() {
+        this.#loadConfig();
+        this.#buildPanel();
+
+        const { IOHook } = DWEM.Modules;
+        IOHook.handle_message.after.addHandler('DCSSAdvisor', (msg) => {
+            this.#onMessage(msg);
+        });
+    }
+
+    // ─── WebSocket 메시지 처리 ────────────────────────────────────────────
+    #onMessage(raw) {
+        try {
+            const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            const list = Array.isArray(data.msgs) ? data.msgs : [data];
+            for (const m of list) {
+                this.#dispatch(m);
+            }
+        } catch (_) { /* JSON 파싱 실패 무시 */ }
+    }
+
+    #dispatch(m) {
+        switch (m.msg) {
+            // 플레이어 스탯 갱신
+            case 'player':
+                this.#state.player = Object.assign(this.#state.player ?? {}, m);
+                break;
+
+            // 게임 로그 메시지
+            case 'msgs': {
+                const lines = (m.messages ?? []).map(x => x.text ?? '').filter(Boolean);
+                this.#appendLog(lines);
+                if (this.#cfg.autoAdvice && lines.some(l => this.#isSignificant(l))) {
+                    this.#scheduleAdvice();
+                }
+                break;
+            }
+
+            // 새 레벨 진입 등 dungeon level 변경
+            case 'update_level_data':
+            case 'level_change':
+                if (this.#cfg.autoAdvice) this.#scheduleAdvice();
+                break;
+
+            default:
+                break;
+        }
+    }
+
+    #appendLog(lines) {
+        const max = this.#cfg.maxLogLines;
+        this.#state.log.push(...lines);
+        if (this.#state.log.length > max) {
+            this.#state.log = this.#state.log.slice(-max);
+        }
+    }
+
+    /** 즉각 조언이 필요한 이벤트 키워드 */
+    #isSignificant(text) {
+        const kw = [
+            'dies', 'killed', 'You die', 'You are', 'You have', 'You feel',
+            'danger', 'paralysed', 'confusion', 'poisoned', 'cursed', 'found',
+            'level up', 'You are now', 'HP:', 'LOW HP', 'reached', 'enters',
+            '죽었습니다', '레벨업', '발견했습니다', '위험',
+        ];
+        return kw.some(k => text.includes(k));
+    }
+
+    // ─── 조언 요청 스로틀링 ───────────────────────────────────────────────
+    #scheduleAdvice() {
+        const now = Date.now();
+        if (this.#state.busy) return;
+        if (now - this.#state.lastAdviceAt < this.#cfg.cooldownMs) return;
+        this.#requestAdvice();
+    }
+
+    // ─── Ollama API 호출 ──────────────────────────────────────────────────
+    async #requestAdvice() {
+        if (this.#state.busy) return;
+        this.#state.busy = true;
+        this.#state.lastAdviceAt = Date.now();
+        this.#setStatus('⏳ 분석 중…');
+
+        const prompt = this.#buildPrompt();
+        const url = `${this.#cfg.ollamaUrl}/api/chat`;
+
+        try {
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    model: this.#cfg.model,
+                    stream: false,
+                    messages: [
+                        {
+                            role: 'system',
+                            content: this.#cfg.lang === 'ko'
+                                ? 'DCSS(Dungeon Crawl Stone Soup) 전문가입니다. 현재 상황을 분석하고 즉시 실행 가능한 전술·전략 조언을 한국어로 3~5 문장으로 알려주세요.'
+                                : 'You are a DCSS expert. Analyze the current situation and give 3-5 concise tactical/strategic tips in English.',
+                        },
+                        { role: 'user', content: prompt },
+                    ],
+                }),
+            });
+
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const json = await res.json();
+            const advice = json?.message?.content ?? '응답을 받지 못했습니다.';
+            this.#showAdvice(advice);
+        } catch (err) {
+            this.#setStatus(`❌ 오류: ${err.message}`);
+        } finally {
+            this.#state.busy = false;
+        }
+    }
+
+    #buildPrompt() {
+        const p = this.#state.player;
+        const log = this.#state.log.slice(-15).join('\n');
+
+        const stats = p
+            ? [
+                `종족/직업: ${p.species ?? '?'} ${p.background ?? '?'}`,
+                `레벨: ${p.xl ?? '?'} / XP: ${p.exp ?? '?'}`,
+                `HP: ${p.hp ?? '?'}/${p.mhp ?? '?'}  MP: ${p.mp ?? '?'}/${p.mmp ?? '?'}`,
+                `AC: ${p.ac ?? '?'}  EV: ${p.ev ?? '?'}  SH: ${p.sh ?? '?'}`,
+                `위치: ${p.place ?? '?'}`,
+                `신: ${p.god ?? '없음'}`,
+                `상태이상: ${(p.status ?? []).map(s => s.light ?? s.text ?? s).join(', ') || '없음'}`,
+            ].join('\n')
+            : '플레이어 정보 없음 (아직 게임 시작 전)';
+
+        return `[현재 캐릭터 상태]\n${stats}\n\n[최근 게임 로그]\n${log || '(없음)'}`;
+    }
+
+    // ─── UI 구축 ─────────────────────────────────────────────────────────
+    #buildPanel() {
+        const style = document.createElement('style');
+        style.textContent = `
+            #dcss-advisor-panel {
+                position: fixed;
+                bottom: 12px;
+                right: 12px;
+                width: 340px;
+                max-height: 480px;
+                display: flex;
+                flex-direction: column;
+                background: rgba(10, 10, 18, 0.92);
+                border: 1px solid #5a3e7a;
+                border-radius: 8px;
+                font-family: 'Noto Sans KR', sans-serif;
+                font-size: 13px;
+                color: #e0d8f0;
+                box-shadow: 0 4px 24px rgba(0,0,0,0.7);
+                z-index: 99999;
+                resize: both;
+                overflow: hidden;
+                min-width: 260px;
+                min-height: 100px;
+            }
+            #dcss-advisor-panel.minimized { max-height: 38px; }
+            #dcss-advisor-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 6px 10px;
+                background: #2a1a3a;
+                border-radius: 8px 8px 0 0;
+                cursor: move;
+                user-select: none;
+                flex-shrink: 0;
+            }
+            #dcss-advisor-header span { font-weight: bold; color: #c09cf0; }
+            #dcss-advisor-header .hbtns { display: flex; gap: 4px; }
+            #dcss-advisor-header button {
+                background: none;
+                border: 1px solid #5a3e7a;
+                border-radius: 4px;
+                color: #c09cf0;
+                padding: 1px 6px;
+                cursor: pointer;
+                font-size: 12px;
+            }
+            #dcss-advisor-header button:hover { background: #3a2a5a; }
+            #dcss-advisor-body {
+                flex: 1;
+                overflow-y: auto;
+                padding: 8px 10px;
+                white-space: pre-wrap;
+                line-height: 1.5;
+                color: #d0e8d0;
+            }
+            #dcss-advisor-footer {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                padding: 5px 8px;
+                border-top: 1px solid #3a2a5a;
+                flex-shrink: 0;
+            }
+            #dcss-advisor-footer button {
+                flex: 1;
+                padding: 3px 0;
+                border: 1px solid #5a3e7a;
+                border-radius: 4px;
+                background: #1e1030;
+                color: #c09cf0;
+                cursor: pointer;
+                font-size: 12px;
+            }
+            #dcss-advisor-footer button:hover { background: #3a1a6a; }
+            #dcss-advisor-footer button.active { background: #4a1a8a; }
+            #dcss-advisor-status {
+                font-size: 11px;
+                color: #888;
+                padding: 0 10px 4px;
+                flex-shrink: 0;
+            }
+            #dcss-advisor-cfg {
+                padding: 8px 10px;
+                display: none;
+                flex-direction: column;
+                gap: 4px;
+                border-top: 1px solid #3a2a5a;
+                font-size: 12px;
+            }
+            #dcss-advisor-cfg.open { display: flex; }
+            #dcss-advisor-cfg label { color: #aaa; }
+            #dcss-advisor-cfg input, #dcss-advisor-cfg select {
+                background: #111;
+                border: 1px solid #444;
+                border-radius: 3px;
+                color: #ddd;
+                padding: 2px 5px;
+                width: 100%;
+                box-sizing: border-box;
+            }
+        `;
+        document.head.appendChild(style);
+
+        const panel = document.createElement('div');
+        panel.id = 'dcss-advisor-panel';
+        panel.innerHTML = `
+            <div id="dcss-advisor-header">
+                <span>🔮 DCSS Advisor</span>
+                <div class="hbtns">
+                    <button id="dcss-adv-settings-btn" title="설정">⚙</button>
+                    <button id="dcss-adv-min-btn" title="최소화">_</button>
+                </div>
+            </div>
+            <div id="dcss-advisor-cfg">
+                <label>Ollama URL</label>
+                <input id="dcss-adv-url" type="text" value="${this.#cfg.ollamaUrl}" />
+                <label>모델</label>
+                <input id="dcss-adv-model" type="text" value="${this.#cfg.model}" />
+                <label>언어</label>
+                <select id="dcss-adv-lang">
+                    <option value="ko" ${this.#cfg.lang === 'ko' ? 'selected' : ''}>한국어</option>
+                    <option value="en" ${this.#cfg.lang === 'en' ? 'selected' : ''}>English</option>
+                </select>
+                <button id="dcss-adv-save-btn">저장</button>
+            </div>
+            <div id="dcss-advisor-body">아직 조언이 없습니다.\n게임을 시작하면 자동으로 분석합니다.</div>
+            <div id="dcss-advisor-status"></div>
+            <div id="dcss-advisor-footer">
+                <button id="dcss-adv-auto-btn" class="${this.#cfg.autoAdvice ? 'active' : ''}">
+                    자동 ${this.#cfg.autoAdvice ? 'ON' : 'OFF'}
+                </button>
+                <button id="dcss-adv-ask-btn">지금 조언 받기</button>
+            </div>
+        `;
+        document.body.appendChild(panel);
+        this.#panel = panel;
+
+        // 버튼 이벤트
+        panel.querySelector('#dcss-adv-min-btn').addEventListener('click', () => {
+            panel.classList.toggle('minimized');
+        });
+
+        panel.querySelector('#dcss-adv-settings-btn').addEventListener('click', () => {
+            panel.querySelector('#dcss-advisor-cfg').classList.toggle('open');
+        });
+
+        panel.querySelector('#dcss-adv-save-btn').addEventListener('click', () => {
+            this.#cfg.ollamaUrl = panel.querySelector('#dcss-adv-url').value.trim().replace(/\/$/, '');
+            this.#cfg.model = panel.querySelector('#dcss-adv-model').value.trim();
+            this.#cfg.lang = panel.querySelector('#dcss-adv-lang').value;
+            this.#saveConfig();
+            panel.querySelector('#dcss-advisor-cfg').classList.remove('open');
+            this.#setStatus('✅ 설정 저장됨');
+        });
+
+        panel.querySelector('#dcss-adv-auto-btn').addEventListener('click', () => {
+            this.#cfg.autoAdvice = !this.#cfg.autoAdvice;
+            const btn = panel.querySelector('#dcss-adv-auto-btn');
+            btn.textContent = `자동 ${this.#cfg.autoAdvice ? 'ON' : 'OFF'}`;
+            btn.classList.toggle('active', this.#cfg.autoAdvice);
+            this.#saveConfig();
+        });
+
+        panel.querySelector('#dcss-adv-ask-btn').addEventListener('click', () => {
+            this.#requestAdvice();
+        });
+
+        // 드래그 이동
+        this.#makeDraggable(panel, panel.querySelector('#dcss-advisor-header'));
+    }
+
+    #makeDraggable(el, handle) {
+        let dx = 0, dy = 0, mx = 0, my = 0;
+        handle.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            mx = e.clientX;
+            my = e.clientY;
+            const onMove = (e) => {
+                dx = mx - e.clientX;
+                dy = my - e.clientY;
+                mx = e.clientX;
+                my = e.clientY;
+                el.style.top = (el.offsetTop - dy) + 'px';
+                el.style.right = '';
+                el.style.left = (el.offsetLeft - dx) + 'px';
+                el.style.bottom = '';
+            };
+            const onUp = () => {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+            };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+    }
+
+    #showAdvice(text) {
+        if (!this.#panel) return;
+        this.#panel.querySelector('#dcss-advisor-body').textContent = text;
+        this.#setStatus(`✅ ${new Date().toLocaleTimeString()} 갱신`);
+    }
+
+    #setStatus(msg) {
+        if (!this.#panel) return;
+        this.#panel.querySelector('#dcss-advisor-status').textContent = msg;
+    }
+
+    // ─── 설정 저장/불러오기 ───────────────────────────────────────────────
+    #loadConfig() {
+        try {
+            const saved = JSON.parse(localStorage.getItem('DCSS_ADVISOR_CFG') ?? '{}');
+            Object.assign(this.#cfg, saved);
+        } catch (_) { /* 무시 */ }
+    }
+
+    #saveConfig() {
+        localStorage.setItem('DCSS_ADVISOR_CFG', JSON.stringify(this.#cfg));
+    }
+}
