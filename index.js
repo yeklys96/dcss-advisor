@@ -23,7 +23,7 @@ export default class DCSSAdvisor {
         ollamaUrl: 'http://localhost:11434',
         ollamaModel: 'qwen2.5:3b-instruct',
         autoAdvice: true,
-        cooldownMs: 10000,
+        cooldownMs: 30000,
         maxLogLines: 30,
         lang: 'ko',
     };
@@ -157,6 +157,15 @@ export default class DCSSAdvisor {
                 : await this.#callOllama(prompt);
             this.#showAdvice(advice);
         } catch (err) {
+            if (err.message.includes('429') || err.message.toLowerCase().includes('rate limit')) {
+                // 429: 60초 후 자동 재시도
+                this.#setStatus('⚠️ Rate limit — 60초 후 재시도합니다');
+                setTimeout(() => {
+                    this.#state.busy = false;
+                    this.#requestAdvice();
+                }, 60000);
+                return;
+            }
             this.#setStatus(`❌ 오류: ${err.message}`);
         } finally {
             this.#state.busy = false;
