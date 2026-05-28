@@ -333,7 +333,14 @@ export default class DCSSAdvisor {
             '[최근 게임 로그]',
             log || '(없음)',
         ].join('\n');
-        console.log('[DCSSAdvisor] 프롬프트 길이:', prompt.length, '글자');
+        console.log('[DCSSAdvisor] 프롬프트 길이:', prompt.length, '글자\n' +
+            `  stats: ${p ? 'OK' : '❌없음'}` +
+            ` | skills: ${this.#state.skills.length}개` +
+            ` | spells: ${this.#state.spells.length}개` +
+            ` | inv: ${Object.keys(this.#state.inv).length}칸` +
+            ` | log: ${this.#state.log.length}줄`
+        );
+        console.log('[DCSSAdvisor] 프롬프트 전체:\n', prompt);
         return prompt;
     }
 
