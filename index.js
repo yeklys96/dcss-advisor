@@ -49,36 +49,36 @@ export default class DCSSAdvisor {
         console.log(`[DCSSAdvisor] 설정: provider=${this.#cfg.provider}, model=${this.#cfg.geminiModel}, apiKey=${this.#cfg.apiKey ? '설정됨' : '❌ 없음'}`);
         this.#buildPanel();
 
-        const { IOHook } = DWEM.Modules;
-        IOHook.handle_message.after.addHandler('DCSSAdvisor', (msg) => {
+        const { IOHook, RCManager } = DWEM.Modules;
+
+        // .before 핸들러: 일반 WebSocket 메시지 + RCManager가 replay하는 초기 배치 모두 수신
+        // .after는 replay 시 호출 안 될 수 있음
+        IOHook.handle_message.before.addHandler('DCSSAdvisor', (msg) => {
             this.#onMessage(msg);
+            // truthy 반환 금지 — 반환하면 메시지가 차단됨
         });
-        console.log('[DCSSAdvisor] IOHook 핸들러 등록 완료');
-    }
 
-    // ─── 게임 시작 시 초기 상태 수신 (RCManager 훅) ──────────────────────
-    // IOHook 등록 전에 도착하는 첫 번째 game state 배치를 이 훅으로 처리
-    async onGameInitialize(data) {
-        // 새 게임 세션 — 이전 상태 초기화
-        this.#state.player = null;
-        this.#state.inv = {};
-        this.#state.spells = [];
-        this.#state.skills = [];
-        this.#state.log = [];
-        this.#state.retryCount = 0;
+        // RCManager.addHandlers로 등록해야 onGameInitialize가 호출됨
+        // (class method으로 선언해도 RCManager가 자동 탐색하지 않음)
+        RCManager.addHandlers('dcss-advisor', {
+            onGameInitialize: async (_rcfile) => {
+                // _rcfile = RC 파일 텍스트 (게임 상태 아님)
+                // 게임 상태는 이 핸들러 완료 후 IOHook.before replay로 도착함
+                this.#state.player = null;
+                this.#state.inv = {};
+                this.#state.spells = [];
+                this.#state.skills = [];
+                this.#state.log = [];
+                this.#state.retryCount = 0;
+                console.log('[DCSSAdvisor] 새 게임 감지 — 상태 초기화');
+            },
+            onGameEnd: () => {
+                this.#state.player = null;
+                console.log('[DCSSAdvisor] 게임 종료');
+            },
+        });
 
-        try {
-            const batch = typeof data === 'string' ? JSON.parse(data) : data;
-            const list = Array.isArray(batch?.msgs) ? batch.msgs
-                       : Array.isArray(batch)        ? batch
-                       : batch ? [batch]             : [];
-            for (const m of list) {
-                if (m?.msg) this.#dispatch(m);
-            }
-        } catch (e) {
-            console.warn('[DCSSAdvisor] onGameInitialize 파싱 오류:', e);
-        }
-        console.log(`[DCSSAdvisor] 초기 상태 수신 완료: player=${!!this.#state.player} skills=${this.#state.skills.length} spells=${this.#state.spells.length} inv=${Object.keys(this.#state.inv).length}`);
+        console.log('[DCSSAdvisor] IOHook.before + RCManager 핸들러 등록 완료');
     }
 
     // ─── WebSocket 메시지 처리 ────────────────────────────────────────────
