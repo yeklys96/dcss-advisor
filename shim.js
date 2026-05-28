@@ -9,20 +9,20 @@
  */
 
 // jsDelivr CDN (CNC CSP 허용 도메인, application/javascript MIME 타입 보장)
-// 커밋 해시로 고정 → CDN 캐시 완전 우회
+// @main 참조 → index.js 업데이트 시 shim.js/tampermonkey.js 해시 재발급 불필요
 const ADVISOR_URL =
-    'https://cdn.jsdelivr.net/gh/yeklys96/dcss-advisor@18230793b28ac53e9ea63a11846c9f722dae11f0/index.js';
+    'https://cdn.jsdelivr.net/gh/yeklys96/dcss-advisor@main/index.js';
 
 // DWEM_LATEST: 이전 페이지 방문 시 캐시된 commit hash, 없으면 'latest'
 const LATEST = localStorage.getItem('DWEM_LATEST') || 'latest';
 
-// DWEM_MODULES에 advisor URL 추가 (중복 방지)
+// DWEM_MODULES에 advisor URL 추가
+// 이전 버전 커밋 해시 URL이 남아있으면 제거하고 최신 URL로 교체
 try {
     const mods = JSON.parse(localStorage.getItem('DWEM_MODULES') || '[]');
-    if (!mods.includes(ADVISOR_URL)) {
-        mods.unshift(ADVISOR_URL);
-        localStorage.setItem('DWEM_MODULES', JSON.stringify(mods));
-    }
+    const filtered = mods.filter(u => !u.includes('yeklys96/dcss-advisor'));
+    filtered.unshift(ADVISOR_URL);
+    localStorage.setItem('DWEM_MODULES', JSON.stringify(filtered));
 } catch (e) {
     console.warn('[DCSSAdvisor shim] DWEM_MODULES 파싱 실패:', e);
 }
