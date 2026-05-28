@@ -17,7 +17,7 @@ export default class DCSSAdvisor {
     #cfg = {
         provider: 'gemini',          // 'gemini' | 'openrouter' | 'ollama'
         apiKey: '',                      // Gemini API 키 (aistudio.google.com/apikey)
-        geminiModel: 'gemini-2.0-flash', // 무료: gemini-2.0-flash (1500/day), gemini-2.5-flash (20/day)
+        geminiModel: 'gemini-2.5-flash', // 무료 RPM: gemini-2.5-flash (10 RPM), gemini-2.0-flash (15 RPM)
         openrouterKey: '',               // OpenRouter API 키 (openrouter.ai/keys)
         openrouterModel: 'google/gemini-2.0-flash-exp:free', // 무료 모델
         ollamaUrl: 'http://localhost:11434',
@@ -608,10 +608,10 @@ export default class DCSSAdvisor {
         try {
             const saved = JSON.parse(localStorage.getItem('DCSS_ADVISOR_CFG') ?? '{}');
             Object.assign(this.#cfg, saved);
-            if (this.#cfg.geminiModel === 'gemini-2.5-flash') {
-                this.#cfg.geminiModel = 'gemini-2.0-flash';
+            if (this.#cfg.geminiModel === 'gemini-2.0-flash') {
+                this.#cfg.geminiModel = 'gemini-2.5-flash';
                 this.#saveConfig();
-                console.log('[DCSSAdvisor] 모델 자동 전환: gemini-2.5-flash → gemini-2.0-flash (1500/일)');
+                console.log('[DCSSAdvisor] 모델 전환: gemini-2.0-flash → gemini-2.5-flash');
             }
         } catch (_) { /* 무시 */ }
     }
