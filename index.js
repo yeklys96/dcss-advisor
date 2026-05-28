@@ -37,6 +37,7 @@ export default class DCSSAdvisor {
         log: [],             // 최근 게임 로그 텍스트
         lastAdviceAt: 0,
         busy: false,
+        retryCount: 0,
     };
 
     #panel = null;           // 패널 DOM 요소
@@ -154,13 +155,19 @@ export default class DCSSAdvisor {
     // ─── 조언 요청 스로틀링 ───────────────────────────────────────────────
     #scheduleAdvice() {
         const now = Date.now();
-        if (this.#state.busy) return;        if (!this.#state.player) return;  // player 데이터 없으면 스킵 (게임 시작 전)        if (now - this.#state.lastAdviceAt < this.#cfg.cooldownMs) return;
+        if (this.#state.busy) return;
+        if (!this.#state.player) return;
+        if (now - this.#state.lastAdviceAt < this.#cfg.cooldownMs) return;
         this.#requestAdvice();
     }
 
     // ─── AI API 호출 (provider에 따라 분기) ──────────────────────────────
     async #requestAdvice() {
         if (this.#state.busy) return;
+        if (!this.#state.player) {
+            this.#setStatus('⚠️ 게임을 시작하면 자동으로 분석합니다');
+            return;
+        }
         this.#state.busy = true;
         this.#state.lastAdviceAt = Date.now();
         this.#setStatus('⏳ 분석 중…');
@@ -182,12 +189,15 @@ export default class DCSSAdvisor {
 
             if (err.message.includes('429') || msg.includes('rate limit') || msg.includes('quota') || msg.includes('billing')) {
                 if (retryMs) {
-                    // 서버가 알려준 시간 후 재시도
+                    this.#state.retryCount++;
+                    if (this.#state.retryCount > 3) {
+                        this.#setStatus('❌ 일일 API 할당량 초과 — 내일 다시 시도하거나 ⚙에서 다른 모델로 변경하세요 (gemini-2.0-flash 권장: 1500/일)');
+                        return;
+                    }
                     retrying = true;
-                    this.#setStatus(`⚠️ API 한도 — ${Math.ceil(retryMs / 1000)}초 후 재시도합니다`);
+                    this.#setStatus(`⚠️ API 한도 — ${Math.ceil(retryMs / 1000)}초 후 재시도합니다 (${this.#state.retryCount}/3)`);
                     setTimeout(() => { this.#state.busy = false; this.#requestAdvice(); }, retryMs);
                 } else {
-                    // retry 시간 없음 = 일일 한도 초과 가능성
                     this.#setStatus(`❌ 오류: ${err.message}`);
                 }
                 return;
@@ -582,6 +592,7 @@ export default class DCSSAdvisor {
 
     #showAdvice(text) {
         if (!this.#panel) return;
+        this.#state.retryCount = 0;
         console.log('[DCSSAdvisor] 패널 표시:', text.length, '글자');
         this.#panel.querySelector('#dcss-advisor-body').textContent = text;
         this.#setStatus(`✅ ${new Date().toLocaleTimeString()} 갱신 (${text.length}글자)`);
@@ -597,6 +608,11 @@ export default class DCSSAdvisor {
         try {
             const saved = JSON.parse(localStorage.getItem('DCSS_ADVISOR_CFG') ?? '{}');
             Object.assign(this.#cfg, saved);
+            if (this.#cfg.geminiModel === 'gemini-2.5-flash') {
+                this.#cfg.geminiModel = 'gemini-2.0-flash';
+                this.#saveConfig();
+                console.log('[DCSSAdvisor] 모델 자동 전환: gemini-2.5-flash → gemini-2.0-flash (1500/일)');
+            }
         } catch (_) { /* 무시 */ }
     }
 
