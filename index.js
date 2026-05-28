@@ -33,6 +33,7 @@ export default class DCSSAdvisor {
         player: null,        // player 메시지 누적 객체
         inv: {},             // slot→item 인벤토리 (inv 메시지)
         spells: [],          // 배운 마법 목록 (spells 메시지)
+        skills: [],          // 스킬 목록 (skills 메시지)
         log: [],             // 최근 게임 로그 텍스트
         lastAdviceAt: 0,
         busy: false,
@@ -96,6 +97,19 @@ export default class DCSSAdvisor {
                 }
                 break;
             }
+
+            // 스킬 목록 갱신
+            case 'skills':
+                this.#state.skills = (m.skills ?? []).filter(s => (s.level ?? 0) > 0).map(s => {
+                    const trained = s.training ? ` [훈련중]` : '';
+                    return `${s.name ?? s.id ?? '?'} Lv${s.level ?? 0}${trained}`;
+                }).sort((a, b) => {
+                    // level 숫자 기준 내림차순
+                    const la = parseInt(a.match(/Lv(\d+)/)?.[1] ?? '0');
+                    const lb = parseInt(b.match(/Lv(\d+)/)?.[1] ?? '0');
+                    return lb - la;
+                });
+                break;
 
             // 마법 목록 갱신
             case 'spells':
@@ -287,17 +301,10 @@ export default class DCSSAdvisor {
             ].join('\n')
             : '플레이어 정보 없음 (아직 게임 시작 전)';
 
-        // 스킬 (player 메시지에 포함된 경우)
-        const skills = (() => {
-            const raw = p?.skills ?? [];
-            if (!raw.length) return '(없음)';
-            return raw
-                .filter(s => (s.level ?? 0) > 0)
-                .sort((a, b) => (b.level ?? 0) - (a.level ?? 0))
-                .slice(0, 12)
-                .map(s => `${s.name ?? s.id ?? '?'} Lv${s.level ?? 0}`)
-                .join(', ') || '(없음)';
-        })();
+        // 스킬 (skills 메시지에서 수집)
+        const skills = this.#state.skills.length
+            ? this.#state.skills.slice(0, 12).join(', ')
+            : '(없음)';
 
         // 마법
         const spells = this.#state.spells.length
