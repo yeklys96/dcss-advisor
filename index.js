@@ -10,7 +10,7 @@
 export default class DCSSAdvisor {
     static name = 'DCSSAdvisor';
     static version = '1.0';
-    static dependencies = ['IOHook:1.0'];
+    static dependencies = ['IOHook:1.0', 'RCManager:1.0'];
     static description = 'AI DCSS 게임 조언 패널 (Gemini / OpenRouter / Ollama)';
 
     // ─── 설정 (localStorage 에 저장됨) ───────────────────────────────────
@@ -54,6 +54,31 @@ export default class DCSSAdvisor {
             this.#onMessage(msg);
         });
         console.log('[DCSSAdvisor] IOHook 핸들러 등록 완료');
+    }
+
+    // ─── 게임 시작 시 초기 상태 수신 (RCManager 훅) ──────────────────────
+    // IOHook 등록 전에 도착하는 첫 번째 game state 배치를 이 훅으로 처리
+    async onGameInitialize(data) {
+        // 새 게임 세션 — 이전 상태 초기화
+        this.#state.player = null;
+        this.#state.inv = {};
+        this.#state.spells = [];
+        this.#state.skills = [];
+        this.#state.log = [];
+        this.#state.retryCount = 0;
+
+        try {
+            const batch = typeof data === 'string' ? JSON.parse(data) : data;
+            const list = Array.isArray(batch?.msgs) ? batch.msgs
+                       : Array.isArray(batch)        ? batch
+                       : batch ? [batch]             : [];
+            for (const m of list) {
+                if (m?.msg) this.#dispatch(m);
+            }
+        } catch (e) {
+            console.warn('[DCSSAdvisor] onGameInitialize 파싱 오류:', e);
+        }
+        console.log(`[DCSSAdvisor] 초기 상태 수신 완료: player=${!!this.#state.player} skills=${this.#state.skills.length} spells=${this.#state.spells.length} inv=${Object.keys(this.#state.inv).length}`);
     }
 
     // ─── WebSocket 메시지 처리 ────────────────────────────────────────────
