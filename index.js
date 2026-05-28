@@ -154,8 +154,7 @@ export default class DCSSAdvisor {
     // ─── 조언 요청 스로틀링 ───────────────────────────────────────────────
     #scheduleAdvice() {
         const now = Date.now();
-        if (this.#state.busy) return;
-        if (now - this.#state.lastAdviceAt < this.#cfg.cooldownMs) return;
+        if (this.#state.busy) return;        if (!this.#state.player) return;  // player 데이터 없으면 스킵 (게임 시작 전)        if (now - this.#state.lastAdviceAt < this.#cfg.cooldownMs) return;
         this.#requestAdvice();
     }
 
@@ -177,16 +176,20 @@ export default class DCSSAdvisor {
             this.#showAdvice(advice);
         } catch (err) {
             const msg = err.message.toLowerCase();
-            if (msg.includes('quota') || msg.includes('billing')) {
-                // 쿼터 초과: 재시도 없음 (자동 재시도하면 더 많은 요청이 가게 됨)
-                this.#setStatus(`❌ 오류: ${err.message}`);
-                return;
-            }
-            if (err.message.includes('429') || msg.includes('rate limit')) {
-                // 429: busy 유지한 채로 60초 후 재시도 (finally가 busy를 false로 만들지 않도록)
-                retrying = true;
-                this.#setStatus('⚠️ Rate limit — 60초 후 재시도합니다');
-                setTimeout(() => { this.#state.busy = false; this.#requestAdvice(); }, 60000);
+            // retry in X.Xs 파싱 — 서버가 알려주는 대기 시간 사용
+            const retryMatch = err.message.match(/retry in ([\d.]+)s/i);
+            const retryMs = retryMatch ? Math.ceil(parseFloat(retryMatch[1]) * 1000) + 2000 : null;
+
+            if (err.message.includes('429') || msg.includes('rate limit') || msg.includes('quota') || msg.includes('billing')) {
+                if (retryMs) {
+                    // 서버가 알려준 시간 후 재시도
+                    retrying = true;
+                    this.#setStatus(`⚠️ API 한도 — ${Math.ceil(retryMs / 1000)}초 후 재시도합니다`);
+                    setTimeout(() => { this.#state.busy = false; this.#requestAdvice(); }, retryMs);
+                } else {
+                    // retry 시간 없음 = 일일 한도 초과 가능성
+                    this.#setStatus(`❌ 오류: ${err.message}`);
+                }
                 return;
             }
             if (msg.includes('high demand') || msg.includes('try again') || msg.includes('unavailable') || msg.includes('overloaded') || err.message.includes('503')) {
