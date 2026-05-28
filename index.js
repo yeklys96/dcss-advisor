@@ -125,13 +125,14 @@ export default class DCSSAdvisor {
         }
     }
 
-    /** 즉각 조언이 필요한 이벤트 키워드 */
+    /** 즉각 조언이 필요한 중요 이벤트 키워드 (너무 일반적인 키워드는 제외) */
     #isSignificant(text) {
         const kw = [
-            'dies', 'killed', 'You die', 'You are', 'You have', 'You feel',
-            'danger', 'paralysed', 'confusion', 'poisoned', 'cursed', 'found',
-            'level up', 'You are now', 'HP:', 'LOW HP', 'reached', 'enters',
-            '죽었습니다', '레벨업', '발견했습니다', '위험',
+            'You die', 'dies', 'killed by',
+            'paralysed', 'confused', 'poisoned', 'severely',
+            'LOW HP', 'You are now level', 'level up',
+            'You enter', 'You reach',
+            '죽었습니다', '레벨업',
         ];
         return kw.some(k => text.includes(k));
     }
@@ -152,6 +153,7 @@ export default class DCSSAdvisor {
         this.#setStatus('⏳ 분석 중…');
 
         const prompt = this.#buildPrompt();
+        let retrying = false;
         try {
             const advice = this.#cfg.provider === 'gemini'
                 ? await this.#callGemini(prompt)
@@ -161,14 +163,21 @@ export default class DCSSAdvisor {
             this.#showAdvice(advice);
         } catch (err) {
             const msg = err.message.toLowerCase();
+            if (msg.includes('quota') || msg.includes('billing')) {
+                // 쿼터 초과: 재시도 없음 (자동 재시도하면 더 많은 요청이 가게 됨)
+                this.#setStatus(`❌ 오류: ${err.message}`);
+                return;
+            }
             if (err.message.includes('429') || msg.includes('rate limit')) {
-                // 429: 60초 후 자동 재시도
+                // 429: busy 유지한 채로 60초 후 재시도 (finally가 busy를 false로 만들지 않도록)
+                retrying = true;
                 this.#setStatus('⚠️ Rate limit — 60초 후 재시도합니다');
                 setTimeout(() => { this.#state.busy = false; this.#requestAdvice(); }, 60000);
                 return;
             }
             if (msg.includes('high demand') || msg.includes('try again') || msg.includes('unavailable') || msg.includes('overloaded') || err.message.includes('503')) {
-                // 서버 과부하: 30초 후 자동 재시도
+                // 서버 과부하: busy 유지한 채로 30초 후 재시도
+                retrying = true;
                 this.#setStatus('⚠️ 서버 과부하 — 30초 후 재시도합니다');
                 console.warn('[DCSSAdvisor] 서버 과부하 재시도 예약:', err.message);
                 setTimeout(() => { this.#state.busy = false; this.#requestAdvice(); }, 30000);
@@ -176,7 +185,7 @@ export default class DCSSAdvisor {
             }
             this.#setStatus(`❌ 오류: ${err.message}`);
         } finally {
-            this.#state.busy = false;
+            if (!retrying) this.#state.busy = false;
         }
     }
 
