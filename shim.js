@@ -11,7 +11,7 @@
 // jsDelivr CDN (CNC CSP 허용 도메인, application/javascript MIME 타입 보장)
 // 커밋 해시로 고정 → CDN 캐시 완전 우회
 const ADVISOR_URL =
-    'https://cdn.jsdelivr.net/gh/yeklys96/dcss-advisor@1629d7cb24b3ee119569788fded79e74f5f668d2/index.js';
+    'https://cdn.jsdelivr.net/gh/yeklys96/dcss-advisor@18230793b28ac53e9ea63a11846c9f722dae11f0/index.js';
 
 // DWEM_LATEST: 이전 페이지 방문 시 캐시된 commit hash, 없으면 'latest'
 const LATEST = localStorage.getItem('DWEM_LATEST') || 'latest';
