@@ -57,11 +57,18 @@ export default class DCSSAdvisor {
     }
 
     // ─── WebSocket 메시지 처리 ────────────────────────────────────────────
+    // 콘솔에서 dcssAdvisorDebug=true 설정 시 수신 메시지 타입 출력
     #onMessage(raw) {
         try {
             const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
             const list = Array.isArray(data.msgs) ? data.msgs : [data];
+            const dbg = window.dcssAdvisorDebug;
+            const skip = new Set(['map', 'ui_state', 'ping', 'cursor', 'flash', 'html', 'set_title', 'txt']);
             for (const m of list) {
+                if (dbg && m.msg && !skip.has(m.msg)) {
+                    console.log('[DCSSAdvisor] rcv:', m.msg,
+                        m.msg === 'player' ? `name=${m.name} hp=${m.hp}/${m.mhp}` : '');
+                }
                 this.#dispatch(m);
             }
         } catch (_) { /* JSON 파싱 실패 무시 */ }
@@ -162,9 +169,10 @@ export default class DCSSAdvisor {
     }
 
     // ─── AI API 호출 (provider에 따라 분기) ──────────────────────────────
-    async #requestAdvice() {
+    // forced=true: 버튼 직접 클릭 시, player null이어도 실행
+    async #requestAdvice(forced = false) {
         if (this.#state.busy) return;
-        if (!this.#state.player) {
+        if (!forced && !this.#state.player) {
             this.#setStatus('⚠️ 게임을 시작하면 자동으로 분석합니다');
             return;
         }
@@ -558,7 +566,7 @@ export default class DCSSAdvisor {
         });
 
         panel.querySelector('#dcss-adv-ask-btn').addEventListener('click', () => {
-            this.#requestAdvice();
+            this.#requestAdvice(true); // forced: player null이어도 실행
         });
 
         // 드래그 이동
